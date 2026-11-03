@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aura Music</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#efeaff;background:linear-gradient(#2a1a6e,#5b3fb5 60%,#8f78d8) fixed;padding:20px}
+main{max-width:560px;margin:auto}h1{font-weight:400;font-size:2rem;margin:.3em 0}h2{font-weight:400;font-size:1.1rem;margin:0 0 10px}
+.card{background:rgba(20,12,50,.55);border:1px solid rgba(255,255,255,.14);border-radius:20px;padding:16px;margin:14px 0;backdrop-filter:blur(10px)}
+button{background:linear-gradient(135deg,#7c5cff,#b7a2ff);color:#fff;border:0;border-radius:14px;padding:12px 18px;font-size:1rem;cursor:pointer}
+button.g{background:rgba(255,255,255,.12)}textarea,input{width:100%;background:rgba(0,0,0,.25);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:14px;padding:12px;font:inherit;margin-bottom:10px}
+.chips span{display:inline-block;background:rgba(255,255,255,.12);border-radius:20px;padding:5px 12px;margin:3px;font-size:.85rem}
+.t{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.08)}.t img{width:44px;height:44px;border-radius:8px}.t a{color:#fff;text-decoration:none}.t small{opacity:.65;display:block}
+#msg{opacity:.8;min-height:1.4em}
+</style></head><body><main>
+<small>Aura Music</small>
+<h1 id="hi">Sua música, no seu ritmo</h1>
+<div id="login" class="card"><p>Conecte o Spotify para analisar seus gostos.</p><button onclick="login()">Conectar Spotify</button></div>
+<div id="app" hidden>
+<div class="card"><h2>Seus artistas favoritos</h2><div class="chips" id="top"></div></div>
+<div class="card"><h2>Descobrir músicas novas</h2><button onclick="discover()">Indicar pra mim</button></div>
+<div class="card"><h2>Criar playlist por pedido</h2>
+<textarea id="p" rows="3" placeholder="Ex.: músicas calmas pra estudar de madrugada"></textarea>
+<button onclick="byText()">Gerar playlist</button></div>
+<p id="msg"></p><div class="card" id="res" hidden></div>
+</div>
+<script>
+const CID='928bf867cc1b48438896cac6f97833d4';
+const RED=location.origin+location.pathname;
+const $=s=>document.querySelector(s);
+const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const say=t=>$('#msg').textContent=t;
+let T,taste='',tops=[],cur=[];
+async function login(){
+  const v=b64(crypto.getRandomValues(new Uint8Array(32)));localStorage.v=v;
+  const c=b64(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)));
+  location=`https://accounts.spotify.com/authorize?`+new URLSearchParams({client_id:CID,response_type:'code',redirect_uri:RED,scope:'user-top-read playlist-modify-private playlist-modify-public',code_challenge_method:'S256',code_challenge:c});
+}
+async function getToken(){
+  const code=new URLSearchParams(location.search).get('code');
+  if(code){history.replaceState({},'',RED);
+    const r=await fetch('https://accounts.spotify.com/api/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:CID,grant_type:'authorization_code',code,redirect_uri:RED,code_verifier:localStorage.v})});
+    const j=await r.json();if(j.access_token){localStorage.t=j.access_token;localStorage.exp=Date.now()+j.expires_in*1000}}
+  return Date.now()<+localStorage.exp?localStorage.t:null;
+}
+async function sp(path,opt={}){
+  const r=await fetch('https://api.spotify.com/v1'+path,{...opt,headers:{Authorization:'Bearer '+T,'Content-Type':'application/json'}});
+  if(!r.ok)throw new Error('Spotify '+r.status);return r.status==204?null:r.json();
+}
+const fn=b=>fetch('/.netlify/functions/ai',{method:'POST',body:JSON.stringify(b)}).then(r=>r.json());
+async function find(list){
+  const r=await Promise.all(list.map(t=>sp('/search?type=track&limit=1&q='+encodeURIComponent(t.title?`track:${t.title} artist:${t.artist}`:`artist:${t.artist}`)).then(x=>x.tracks.items[0]).catch(()=>null)));
+  return r.filter(Boolean);
+}
+function show(tracks,name){
+  cur=tracks;const el=$('#res');el.hidden=false;el.innerHTML='';
+  const h=document.createElement('h2');h.textContent=name;el.append(h);
+  tracks.forEach(x=>{const d=document.createElement('div');d.className='t';
+    d.innerHTML='<img><div><a target="_blank"></a><small></small></div>';
+    d.querySelector('img').src=(x.album.images[2]||x.album.images[0]||{}).url||'';
+    const a=d.querySelector('a');a.textContent=x.name;a.href=x.external_urls.spotify;
+    d.querySelector('small').textContent=x.artists.map(a=>a.name).join(', ');el.append(d)});
+  const b=document.createElement('button');b.textContent='Salvar no Spotify';b.onclick=()=>save(name);el.append(b);
+}
+async function save(name){
+  try{say('Criando playlist...');
+    const pl=await sp('/me/playlists',{method:'POST',body:JSON.stringify({name,description:'Criada pelo Aura Music',public:false})});
+    await sp(`/playlists/${pl.id}/items`,{method:'POST',body:JSON.stringify({uris:cur.map(x=>x.uri)})});
+    say('Playlist salva no seu Spotify!');
+  }catch(e){say('Erro: '+e.message)}
+}
+async function discover(){
+  try{say('Buscando artistas parecidos...');
+    const known=new Set(tops.map(a=>a.toLowerCase()));const found=new Set();
+    const rs=await Promise.all(tops.slice(0,5).map(a=>fn({action:'similar',artist:a})));
+    rs.forEach(r=>(r.names||[]).forEach(n=>{if(!known.has(n.toLowerCase()))found.add(n)}));
+    if(!found.size)return say('Last.fm não respondeu. Confira a chave LASTFM_API_KEY.');
+    const tr=await find([...found].slice(0,15).map(artist=>({artist})));
+    say('');show(tr,'Descobertas para você');
+  }catch(e){say('Erro: '+e.message)}
+}
+async function byText(){
+  const p=$('#p').value.trim();if(!p)return;
+  try{say('A IA está montando sua playlist...');
+    const r=await fn({action:'gemini',prompt:`Você é curador musical. Gostos do usuário: ${taste}\nPedido: "${p}"\nRetorne um JSON array com 20 objetos {"artist":"","title":""} de músicas reais que combinem com o pedido e com os gostos.`});
+    if(r.error||!r.text)return say('Erro da IA: '+(r.error||'sem resposta'));
+    const tr=await find(JSON.parse(r.text));say('');show(tr,p.slice(0,60));
+  }catch(e){say('Erro: '+e.message)}
+}
+(async()=>{
+  T=await getToken();if(!T)return;
+  $('#login').hidden=true;$('#app').hidden=false;
+  try{
+    const [a,t]=await Promise.all([sp('/me/top/artists?limit=20&time_range=medium_term'),sp('/me/top/tracks?limit=20&time_range=medium_term')]);
+    tops=a.items.map(x=>x.name);
+    taste='Artistas: '+tops.join(', ')+'. Músicas: '+t.items.map(x=>x.name+' - '+x.artists[0].name).join('; ');
+    $('#top').innerHTML=tops.slice(0,12).map(n=>'<span></span>').join('');
+    $('#top').querySelectorAll('span').forEach((s,i)=>s.textContent=tops[i]);
+  }catch(e){say('Erro: '+e.message)}
+})();
+</script></main></body></html>
